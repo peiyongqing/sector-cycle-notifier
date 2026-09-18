@@ -113,6 +113,25 @@ jobs:
           ).digest()
           sign = base64.b64encode(digest).decode("utf-8")
 
+          def build_card_elements(message):
+              # Avoid relying on Markdown newline escaping in Feishu cards.
+              # Split paragraphs into separate div elements so copied/rendered
+              # text does not show stray backslashes.
+              normalized = message.replace("\\r\\n", "\n").replace("\\n", "\n")
+              paragraphs = [p.strip() for p in normalized.split("\n\n") if p.strip()]
+              if not paragraphs:
+                  paragraphs = [normalized.strip()]
+              return [
+                  {
+                      "tag": "div",
+                      "text": {
+                          "tag": "lark_md",
+                          "content": paragraph,
+                      },
+                  }
+                  for paragraph in paragraphs
+              ]
+
           level_meta = {
               "info": ("📌", "blue"),
               "opportunity": ("🟢", "green"),
@@ -134,15 +153,7 @@ jobs:
                           "content": f"{emoji} {title}",
                       },
                   },
-                  "elements": [
-                      {
-                          "tag": "div",
-                          "text": {
-                              "tag": "lark_md",
-                              "content": message,
-                          },
-                      }
-                  ],
+                  "elements": build_card_elements(message),
               },
           }
 
