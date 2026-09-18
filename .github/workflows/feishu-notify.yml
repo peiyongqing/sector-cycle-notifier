@@ -1,0 +1,163 @@
+name: Feishu Notify
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Notification title
+        required: true
+        default: Sector Cycle Agent
+      message:
+        description: Notification message
+        required: true
+      level:
+        description: info | opportunity | risk | close
+        required: false
+        default: info
+        type: choice
+        options:
+          - info
+          - opportunity
+          - risk
+          - close
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+
+    steps:
+      - name: Send Feishu notification
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_BOT_SECRET: ${{ secrets.FEISHU_BOT_SECRET }}
+          TITLE: ${{ inputs.title }}
+          MESSAGE: ${{ inputs.message }}
+          LEVEL: ${{ inputs.level }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import time
+          import hmac
+          import hashlib
+          import base64
+          import json
+          import urllib.request
+          import urllib.error
+
+          webhook = os.environ.get("FEISHU_WEBHOOK_URL", "").strip()
+          secret = os.environ.get("FEISHU_BOT_SECRET", "").strip()
+          title = os.environ.get("TITLE", "Sector Cycle Agent").strip()
+          message = os.environ.get("MESSAGE", "").strip()
+          level = os.environ.get("LEVEL", "info").strip().lower()
+
+          if not webhook:
+              raise SystemExit("Missing FEISHU_WEBHOOK_URL secret")
+          if not secret:
+              raise SystemExit("Missing FEISHU_BOT_SECRET secret")
+          if not message:
+              raise SystemExit("Notification message is empty")
+
+          timestamp = str(int(time.time()))
+
+          # Feishu custom bot signature:
+          # key = timestamp + "\n" + secret, message = empty bytes
+          string_to_sign = f"{timestamp}\n{secret}"
+          digest = hmac.new(
+              string_to_sign.encode("utf-8"),
+              b"",
+              hashlib.sha256,
+          ).digest()
+          sign = base64.b64encode(digest).decode("utf-8")
+
+          level_meta = {
+              "info": ("📌", "blue"),
+              "opportunity": ("🟢", "green"),
+              "risk": ("⚠️", "red"),
+              "close": ("📊", "purple"),
+          }
+          emoji, template = level_meta.get(level, ("📌", "blue"))
+
+          payload = {
+              "timestamp": timestamp,
+              "sign": sign,
+              "msg_type": "interactive",
+              "card": {
+                  "config": {
+                      "wide_screen_mode": True
+                  },
+                  "header": {
+                      "template": template,
+                      "title": {
+                          "tag": "plain_text",
+                          "content": f"{emoji} {title}"
+                      }
+                  },
+                  "elements": [
+                      {
+                          "tag": "div",
+                          "text": {
+                              "tag": "lark_md",
+                              "content": message
+                          }
+                      }
+                  ]
+              }
+          }
+
+          body_bytes = json.dumps(
+              payload,
+              ensure_ascii=False
+          ).encode("utf-8")
+
+          request = urllib.request.Request(
+              webhook,
+              data=body_bytes,
+              headers={
+                  "Content-Type": "application/json; charset=utf-8",
+                  "User-Agent": "sector-cycle-notifier/1.0",
+              },
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  response_body = response.read().decode(
+                      "utf-8",
+                      errors="replace"
+                  )
+                  http_status = response.status
+          except urllib.error.HTTPError as exc:
+              response_body = exc.read().decode(
+                  "utf-8",
+                  errors="replace"
+              )
+              raise SystemExit(
+                  f"Feishu HTTP error {exc.code}: {response_body}"
+              )
+          except Exception as exc:
+              raise SystemExit(f"Feishu request failed: {exc}")
+
+          if not 200 <= http_status < 300:
+              raise SystemExit(
+                  f"Unexpected HTTP status {http_status}: {response_body}"
+              )
+
+          try:
+              parsed = json.loads(response_body)
+          except json.JSONDecodeError:
+              raise SystemExit(
+                  f"Feishu returned non-JSON response: {response_body}"
+              )
+
+          code = parsed.get("code")
+          status_code = parsed.get("StatusCode")
+
+          if code not in (None, 0) or status_code not in (None, 0):
+              raise SystemExit(f"Feishu API error: {response_body}")
+
+          print("Feishu notification sent successfully.")
+          PY
