@@ -1,0 +1,1 @@
+Trigger Sector Cycle private outbox -> Feishu end-to-end test.
